@@ -17,7 +17,7 @@ Run install.sql in your schema and **grant execute on passthru_util to <<schema>
 
 ## Example Usage
 ```SQL
-SELECT TO_DATE(C001, 'YYYY-MM-DD HH24:MI:SS') AS LOAD_DT,
+SELECT TO_DATE(C001, 'YYYYMMDD') AS LOAD_DT,
 C002 AS WIDGET_NAME
 FROM   PASSTHRU_UTIL.GET_REMOTE_DATA(P_DB_LNK => 'remote_db_link_name',
                                     P_SQL_STRING => q'[SELECT TO_CHAR(LOAD_DT, 'YYYYMMDD') AS LOADDT, WIDGET_NAME
