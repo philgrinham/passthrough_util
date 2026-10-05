@@ -12,5 +12,5 @@ Oracle PLSQL Utility Wrapper for DBMS_HS_PASSTHROUGH
 Run install.sql in your schema and **grant execute on passthru_util to <<schema>>** to any required schemas/users.
 
 ## Requirements
-Oracle Database
-Execute privilege on DBMS_SQL
+- Oracle Database
+- Execute privilege on DBMS_SQL
