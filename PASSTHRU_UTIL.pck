@@ -443,6 +443,22 @@ CREATE OR REPLACE PACKAGE BODY PASSTHRU_UTIL IS
       
       END IF;
    
+      -- Create the SQL of the 200 columns being selected and pivoted      
+      SELECT LISTAGG(C.SELECTCOL, ',') WITHIN GROUP(ORDER BY COLUMN_ID) AS COLS,
+             LISTAGG(C.PVTCOL, ',') WITHIN GROUP(ORDER BY COLUMN_ID) AS PVT_COLS
+      INTO   V_COLUMNS,
+             V_PIVOT_COLS
+      FROM   (SELECT TO_CHAR(ROWNUM) || ' AS C' || TO_CHAR(ROWNUM, 'FM000') AS PVTCOL,
+                     'C' || TO_CHAR(ROWNUM, 'FM000') AS SELECTCOL,
+                     ROWNUM AS COLUMN_ID
+              FROM   DUAL
+              CONNECT BY LEVEL <= 200) C;
+   
+      -- pivot the columns to a single row that matches the output TYPE   
+      V_SQL := TO_CLOB('SELECT ') || TO_CLOB(V_COLUMNS) ||
+               TO_CLOB(' FROM (SELECT X.COLUMN_NUMBER, X.COLUMN_VALUE FROM TABLE(:B2) X) PIVOT (MAX(COLUMN_VALUE) FOR COLUMN_NUMBER IN(') ||
+               TO_CLOB(V_PIVOT_COLS) || '))';
+   
       V_OUTPUT.EXTEND(1); -- Only need a single row array to output the results
    
       <<RECORD_SET>>
@@ -494,22 +510,6 @@ CREATE OR REPLACE PACKAGE BODY PASSTHRU_UTIL IS
             -- should never happen as the PARSE would fail but....
             RAISE_APPLICATION_ERROR(-20055, 'No columns detected in the SQL return output');
          END IF;
-      
-         -- Create the SQL of the 200 columns being selected and pivoted      
-         SELECT LISTAGG(C.SELECTCOL, ',') WITHIN GROUP(ORDER BY COLUMN_ID) AS COLS,
-                LISTAGG(C.PVTCOL, ',') WITHIN GROUP(ORDER BY COLUMN_ID) AS PVT_COLS
-         INTO   V_COLUMNS,
-                V_PIVOT_COLS
-         FROM   (SELECT TO_CHAR(ROWNUM) || ' AS C' || TO_CHAR(ROWNUM, 'FM000') AS PVTCOL,
-                        'C' || TO_CHAR(ROWNUM, 'FM000') AS SELECTCOL,
-                        ROWNUM AS COLUMN_ID
-                 FROM   DUAL
-                 CONNECT BY LEVEL <= 200) C;
-      
-         -- pivot the columns to a single row that matches the output TYPE   
-         V_SQL := TO_CLOB('SELECT ') || TO_CLOB(V_COLUMNS) ||
-                  TO_CLOB(' FROM (SELECT X.COLUMN_NUMBER, X.COLUMN_VALUE FROM TABLE(:B2) X) PIVOT (MAX(COLUMN_VALUE) FOR COLUMN_NUMBER IN(') ||
-                  TO_CLOB(V_PIVOT_COLS) || '))';
       
          EXECUTE IMMEDIATE V_SQL
             INTO V_OUTPUT_ROW
