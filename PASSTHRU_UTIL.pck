@@ -279,27 +279,26 @@ CREATE OR REPLACE PACKAGE BODY PASSTHRU_UTIL IS
       E_INVALID_COLUMN EXCEPTION;
       PRAGMA EXCEPTION_INIT(E_INVALID_COLUMN, -28553); -- invalid bind error
    
-      V_DB_LINK            ALL_DB_LINKS.DB_LINK%TYPE;
-      V_CUR                INTEGER;
-      V_ROWCOUNT           NUMBER;
-      V_BIND_TBL_COUNT     NUMBER := 0;
-      V_BIND_COUNT         NUMBER := 0;
-      V_OUTPUT             T_RESULTSET_TBL := T_RESULTSET_TBL();
-      V_OUTPUT_ROW         T_RESULTSET_REC;
-      V_OUT_VAL            VARCHAR2(4000);
-      V_COLUMN_REC         T_COLUMN_REC;
-      V_COLUMN_TBL         T_COLUMN_TBL := T_COLUMN_TBL();
-      V_CUR_OPEN           BOOLEAN := FALSE;
-      V_COLUMNS            VARCHAR2(4000);
-      V_PIVOT_COLS         VARCHAR2(4000);
-      V_SQL                CLOB;
-      V_IDXCOL             SIMPLE_INTEGER := 0;
-      V_BIND_NUM_COUNT     SIMPLE_INTEGER := 0;
-      V_BIND_CHAR_COUNT    SIMPLE_INTEGER := 0;
-      V_BIND_DT_COUNT      SIMPLE_INTEGER := 0;
-      V_BIND_CHECK_DUPES   NUMBER;
-      V_BIND_CHECK_MISSING NUMBER;
-      V_COLUMN_COUNT       SIMPLE_INTEGER := 10000; -- set to a high number initially
+      V_DB_LINK         ALL_DB_LINKS.DB_LINK%TYPE;
+      V_CUR             INTEGER;
+      V_ROWCOUNT        NUMBER;
+      V_BIND_TBL_COUNT  NUMBER := 0;
+      V_BIND_COUNT      NUMBER := 0;
+      V_OUTPUT          T_RESULTSET_TBL := T_RESULTSET_TBL();
+      V_OUTPUT_ROW      T_RESULTSET_REC;
+      V_OUT_VAL         VARCHAR2(4000);
+      V_COLUMN_REC      T_COLUMN_REC;
+      V_COLUMN_TBL      T_COLUMN_TBL := T_COLUMN_TBL();
+      V_CUR_OPEN        BOOLEAN := FALSE;
+      V_COLUMNS         VARCHAR2(4000);
+      V_PIVOT_COLS      VARCHAR2(4000);
+      V_SQL             CLOB;
+      V_IDXCOL          SIMPLE_INTEGER := 0;
+      V_BIND_NUM_COUNT  SIMPLE_INTEGER := 0;
+      V_BIND_CHAR_COUNT SIMPLE_INTEGER := 0;
+      V_BIND_DT_COUNT   SIMPLE_INTEGER := 0;
+      V_COLUMN_COUNT    SIMPLE_INTEGER := 10000; -- set to a high number initially
+      V_BIND_REC        TYP_BINDS_REC;
    
       -----------------------------------------------------------------------------------
       PROCEDURE CLOSE_CONNECTION IS
@@ -350,35 +349,6 @@ CREATE OR REPLACE PACKAGE BODY PASSTHRU_UTIL IS
       -- Process the binds if there are any
       IF V_BIND_COUNT > 0 THEN
       
-         -- Check we have all bind variables accounted for and only one of each
-         -- We should have exactly 1 bind variable passed in for every bind parameter detected, no more, no less
-         SELECT COUNT(CASE
-                         WHEN BIND_COUNT > 1 THEN -- duplicate bind positions passed in
-                          1
-                      END),
-                COUNT(CASE
-                         WHEN BIND_COUNT = 0 THEN -- missing bind position
-                          1
-                      END)
-         INTO   V_BIND_CHECK_DUPES,
-                V_BIND_CHECK_MISSING
-         FROM   (SELECT B.BIND_POS,
-                        COUNT(X.BIND_POSITION) AS BIND_COUNT
-                 FROM   (SELECT ROWNUM AS BIND_POS
-                         FROM   DUAL
-                         CONNECT BY LEVEL <= V_BIND_COUNT) B
-                 LEFT   JOIN TABLE(P_BINDS_TBL) X
-                 ON     X.BIND_POSITION = B.BIND_POS
-                 GROUP  BY B.BIND_POS);
-      
-         IF V_BIND_CHECK_DUPES > 0 THEN
-            RAISE_APPLICATION_ERROR(-20073, 'Check the binds passed in, One or more have been duplicated');
-         END IF;
-      
-         IF V_BIND_CHECK_MISSING > 0 THEN
-            RAISE_APPLICATION_ERROR(-20074, 'Check the binds passed in, One or more are missing');
-         END IF;
-      
          <<SQL_BIND>>
          FOR IDX IN 1 .. V_BIND_COUNT LOOP
             -- reset counts 
@@ -386,60 +356,53 @@ CREATE OR REPLACE PACKAGE BODY PASSTHRU_UTIL IS
             V_BIND_CHAR_COUNT := 0;
             V_BIND_DT_COUNT   := 0;
          
-            <<BIND_PARAM>>
-            FOR REC_BIND IN (SELECT X.BIND_VALUE_NUMBER,
-                                    X.BIND_VALUE_VARCHAR2,
-                                    X.BIND_VALUE_DATE
-                             FROM   TABLE(P_BINDS_TBL) X
-                             WHERE  X.BIND_POSITION = IDX) LOOP
-            
-               -- Check each bind type (char/num/date) passed in for this bind position (should only be 1 populated)
-               IF REC_BIND.BIND_VALUE_NUMBER IS NOT NULL THEN
-                  V_BIND_NUM_COUNT := 1;
-               END IF;
-            
-               IF REC_BIND.BIND_VALUE_VARCHAR2 IS NOT NULL THEN
-                  V_BIND_CHAR_COUNT := 1;
-               END IF;
-            
-               IF REC_BIND.BIND_VALUE_DATE IS NOT NULL THEN
-                  V_BIND_DT_COUNT := 1;
-               END IF;
-            
-               -- Should only be 1 of the 3 fields populated so we know what to pass to the SQL
-               IF V_BIND_CHAR_COUNT + V_BIND_DT_COUNT + V_BIND_NUM_COUNT > 1 THEN
-                  RAISE_APPLICATION_ERROR(-20060,
-                                          'Too many bind values passed in, only pass in one of either a char bind, a number bind, or a date bind');
-               END IF;
-            
-               -- Bind the parameter
-               IF V_BIND_NUM_COUNT = 1 THEN
-               
-                  EXECUTE IMMEDIATE 'BEGIN DBMS_HS_PASSTHROUGH.BIND_VARIABLE@' || V_DB_LINK || '(:B1, :B2, :B3); END;'
-                     USING V_CUR, IDX, REC_BIND.BIND_VALUE_NUMBER;
-               
-               ELSIF V_BIND_CHAR_COUNT = 1 THEN
-               
-                  EXECUTE IMMEDIATE 'BEGIN DBMS_HS_PASSTHROUGH.BIND_VARIABLE@' || V_DB_LINK || '(:B1, :B2, :B3); END;'
-                     USING V_CUR, IDX, REC_BIND.BIND_VALUE_VARCHAR2;
-               
-               ELSIF V_BIND_DT_COUNT = 1 THEN
-               
-                  EXECUTE IMMEDIATE 'BEGIN DBMS_HS_PASSTHROUGH.BIND_VARIABLE@' || V_DB_LINK || '(:B1, :B2, :B3); END;'
-                     USING V_CUR, IDX, REC_BIND.BIND_VALUE_DATE;
-               
-               ELSE
-                  RAISE_APPLICATION_ERROR(-20070, 'Bind value missing in bind position ' || IDX);
-               END IF;
-            
-            END LOOP BIND_PARAM;
+            V_BIND_REC := P_BINDS_TBL(IDX);
          
-            IF V_BIND_NUM_COUNT + V_BIND_CHAR_COUNT + V_BIND_DT_COUNT = 0 THEN
-               -- we didn't find the bind variable !!!
-               RAISE_APPLICATION_ERROR(-20029, 'Unable to find bind value in bind position ' || IDX);
+            -- Check each bind type (char/num/date) passed in for this bind position (should only be 1 populated)
+            IF V_BIND_REC.BIND_VALUE_NUMBER IS NOT NULL THEN
+               V_BIND_NUM_COUNT := 1;
             END IF;
          
-         END LOOP SQL_BIND;
+            IF V_BIND_REC.BIND_VALUE_VARCHAR2 IS NOT NULL THEN
+               V_BIND_CHAR_COUNT := 1;
+            END IF;
+         
+            IF V_BIND_REC.BIND_VALUE_DATE IS NOT NULL THEN
+               V_BIND_DT_COUNT := 1;
+            END IF;
+         
+            -- Should only be 1 of the 3 fields populated so we know what to pass to the SQL
+            IF V_BIND_CHAR_COUNT + V_BIND_DT_COUNT + V_BIND_NUM_COUNT > 1 THEN
+               RAISE_APPLICATION_ERROR(-20060,
+                                       'Too many bind values passed in, only pass in one of either a char bind, a number bind, or a date bind');
+            
+            ELSIF V_BIND_NUM_COUNT + V_BIND_CHAR_COUNT + V_BIND_DT_COUNT = 0 THEN
+               -- we didn't find the bind variable !!!
+               RAISE_APPLICATION_ERROR(-20029, 'Unable to find bind value in bind position ' || IDX);
+            
+            END IF;
+         
+            -- Bind the parameter
+            IF V_BIND_NUM_COUNT = 1 THEN
+            
+               EXECUTE IMMEDIATE 'BEGIN DBMS_HS_PASSTHROUGH.BIND_VARIABLE@' || V_DB_LINK || '(:B1, :B2, :B3); END;'
+                  USING V_CUR, IDX, V_BIND_REC.BIND_VALUE_NUMBER;
+            
+            ELSIF V_BIND_CHAR_COUNT = 1 THEN
+            
+               EXECUTE IMMEDIATE 'BEGIN DBMS_HS_PASSTHROUGH.BIND_VARIABLE@' || V_DB_LINK || '(:B1, :B2, :B3); END;'
+                  USING V_CUR, IDX, V_BIND_REC.BIND_VALUE_VARCHAR2;
+            
+            ELSIF V_BIND_DT_COUNT = 1 THEN
+            
+               EXECUTE IMMEDIATE 'BEGIN DBMS_HS_PASSTHROUGH.BIND_VARIABLE@' || V_DB_LINK || '(:B1, :B2, :B3); END;'
+                  USING V_CUR, IDX, V_BIND_REC.BIND_VALUE_DATE;
+            
+            ELSE
+               RAISE_APPLICATION_ERROR(-20070, 'Bind value missing in bind position ' || IDX);
+            END IF;
+         
+         END LOOP BIND_PARAM;
       
       END IF;
    
@@ -484,6 +447,8 @@ CREATE OR REPLACE PACKAGE BODY PASSTHRU_UTIL IS
             BEGIN
                EXECUTE IMMEDIATE 'BEGIN DBMS_HS_PASSTHROUGH.GET_VALUE@' || V_DB_LINK || '(:B1, :B2, :B3); END;'
                   USING IN V_CUR, IN V_IDXCOL, OUT V_OUT_VAL;
+            
+               --               DBMS_HS_PASSTHROUGH.GET_VALUE@SNOWDB_USI_APP(V_CUR, V_IDXCOL, V_OUT_VAL);
             
                IF V_IDXCOL > 200 THEN
                   -- adjust as the TYPE in the spec is changed
